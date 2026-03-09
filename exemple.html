@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trame CAN</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700;800;900&family=Fira+Code:wght@600&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #f0f2f5;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Nunito', sans-serif;
+  padding: 2rem 1rem;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* animated background blobs */
+.bg { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+.blob { position:absolute; border-radius:50%; filter:blur(80px); opacity:0.18; animation:drift linear infinite; }
+.blob:nth-child(1){width:500px;height:500px;background:#a8c8ff;top:-100px;left:-150px;animation-duration:20s;}
+.blob:nth-child(2){width:400px;height:400px;background:#ffb3b3;top:40%;right:-100px;animation-duration:26s;animation-delay:-8s;}
+.blob:nth-child(3){width:300px;height:300px;background:#b3f0c8;bottom:0;left:30%;animation-duration:18s;animation-delay:-5s;}
+@keyframes drift{0%{transform:translate(0,0);}50%{transform:translate(30px,-25px);}100%{transform:translate(0,0);}}
+
+.content { position:relative; z-index:1; width:100%; max-width:1100px; }
+
+h1 { text-align:center; font-size:1.6rem; font-weight:900; color:#1a2535; margin-bottom:0.3rem; }
+.sub { text-align:center; font-size:0.85rem; color:#7a8a9a; margin-bottom:1.8rem; font-weight:700; letter-spacing:0.08em; text-transform:uppercase; }
+
+/* main white card */
+.card {
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 1.8rem 2rem 1.4rem;
+  box-shadow: 0 4px 40px rgba(0,0,0,0.10);
+  width: 100%;
+}
+
+canvas#can {
+  width: 100%;
+  height: 220px;
+  display: block;
+  cursor: pointer;
+}
+
+/* info bar below canvas */
+.info-bar {
+  margin-top: 1.2rem;
+  background: #f7f9fc;
+  border-radius: 12px;
+  padding: 1rem 1.3rem;
+  min-height: 70px;
+  border-left: 4px solid #aaa;
+  transition: border-color 0.3s;
+}
+.info-bar h3 { font-size:0.95rem; font-weight:900; margin-bottom:0.3rem; }
+.info-bar p  { font-size:0.82rem; line-height:1.6; color:#445; }
+
+/* legend */
+.legend {
+  display: flex; gap: 1.5rem; flex-wrap: wrap;
+  margin-top: 1rem; padding-top: 0.8rem;
+  border-top: 1px solid #e8edf2;
+  font-size: 0.78rem; font-weight:700; color:#556;
+}
+.leg { display:flex; align-items:center; gap:0.4rem; }
+.leg-line { width:24px; height:3px; border-radius:2px; }
+.leg-h { background:#e63946; }
+.leg-l { background:#3a86ff; }
+.leg-dot-d { width:11px;height:11px;border-radius:50%;background:#e63946;border:2px solid #e63946; }
+.leg-dot-r { width:11px;height:11px;border-radius:50%;background:#fff;border:2px solid #3a86ff; }
+</style>
+</head>
+<body>
+
+<div class="bg">
+  <div class="blob"></div><div class="blob"></div><div class="blob"></div>
+</div>
+
+<div class="content">
+  <h1>🚗 Trame CAN</h1>
+  <div class="sub">Bus CAN 2.0A — ISO 11898 · Clique sur un champ pour l'expliquer</div>
+
+  <div class="card">
+    <canvas id="can"></canvas>
+
+    <div class="info-bar" id="infoBar">
+      <h3 style="color:#556">👆 Clique sur un champ pour l'expliquer</h3>
+      <p>Deux fils différentiels transportent le signal : <strong style="color:#e63946">CAN_H</strong> et <strong style="color:#3a86ff">CAN_L</strong>. La boule indique le bit en cours. Les champs en bas délimitent la structure de la trame.</p>
+    </div>
+
+    <div class="legend">
+      <div class="leg"><div class="leg-line leg-h"></div> CAN_H</div>
+      <div class="leg"><div class="leg-line leg-l"></div> CAN_L</div>
+      <div class="leg"><div class="leg-dot-d"></div> Bit Dominant (0) — signal actif</div>
+      <div class="leg"><div class="leg-dot-r"></div> Bit Récessif (1) — repos</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// FRAME DEFINITION
+// ============================================================
+const SECTIONS = [
+  { name:'SOF',        color:'#e63946', bits:[0],                        // always dominant
+    title:'SOF — Début de trame',
+    desc:'Un seul bit <b>dominant (0)</b>. Signal de départ : tous les calculateurs se synchronisent sur ce front descendant. Sans lui, personne ne sait qu\'un message commence.'},
+  { name:'ID (11 bits)',color:'#3a6bbf', bits:[1,0,0,1,0,1,1,0,1,0,0],  // sample ID
+    title:'ID — Identifiant (11 bits)',
+    desc:'L\'adresse du <b>type de message</b>. Plus l\'ID est bas (beaucoup de 0 = dominant), plus il est <b>prioritaire</b>. En cas de conflit sur le bus, l\'ID le plus bas gagne.'},
+  { name:'RTR',         color:'#8338ec', bits:[1],                        // recessive = data frame
+    title:'RTR — Demande de données',
+    desc:'<b>Dominant (0)</b> = trame contient des données. <b>Récessif (1)</b> = le nœud demande des données à un autre calculateur. Ici récessif = trame de données normales.'},
+  { name:'CTRL',        color:'#fb8500', bits:[0,0,1,0,0,0],             // IDE=0 r0=0 DLC=2
+    title:'CTRL — Champ de contrôle (6 bits)',
+    desc:'Contient l\'<b>IDE</b> (format standard/étendu), le bit <b>r0</b> réservé, et le <b>DLC</b> (4 bits) qui indique le nombre d\'octets de données (0 à 8).'},
+  { name:'DONNÉES',     color:'#2b9348', bits:[0,1,0,0,1,1,0,1, 1,0,1,1,0,0,1,0], // 2 bytes
+    title:'DATA — Données utiles',
+    desc:'Le <b>vrai message</b> : vitesse, température, état capteur… Jusqu\'à 8 octets librement définis par l\'application. La longueur est fixée par le DLC.'},
+  { name:'CRC',         color:'#d4a017', bits:[1,0,1,1,0,0,1,0,1,1,0,1,0,0,1],
+    title:'CRC — Contrôle d\'erreur (15 bits)',
+    desc:'<b>Empreinte digitale</b> du message. L\'émetteur la calcule, le récepteur refait le calcul. Si différent → erreur détectée → trame rejetée !'},
+  { name:'ACK',         color:'#2a9d8f', bits:[0,1],                     // slot dominant, delim recessive
+    title:'ACK — Acquittement',
+    desc:'L\'émetteur envoie <b>récessif</b>, mais tout récepteur ayant bien reçu <b>écrase en dominant</b>. Ainsi l\'émetteur sait que son message est arrivé — sans message de retour !'},
+  { name:'EOF',         color:'#6c757d', bits:[1,1,1,1,1,1,1],           // 7 recessive
+    title:'EOF — Fin de trame (7 bits)',
+    desc:'Sept bits <b>récessifs</b> consécutifs marquent la fin du message. Le bus retourne au repos. Un dominant ici = erreur de forme !'},
+];
+
+// Flatten all bits with section reference
+const ALL_BITS = [];
+SECTIONS.forEach((s,si) => s.bits.forEach((b,bi) => ALL_BITS.push({bit:b, si, bi})));
+const TOTAL = ALL_BITS.length;
+
+// Compute section x-ranges (will be set after canvas sized)
+let sectionRanges = []; // [{x0,x1,si}]
+
+// ============================================================
+// CANVAS DRAWING
+// ============================================================
+const canvas = document.getElementById('can');
+const ctx    = canvas.getContext('2d');
+
+let ballPos = 0;   // float index into ALL_BITS (scrolling)
+let lastTs  = null;
+const SPEED = 3.5; // bits per second
+
+const PAD_L  = 52;
+const PAD_R  = 20;
+const PAD_TOP = 14;
+
+// Signal heights
+// CAN_H: dominant=HIGH, recessive=LOW_H
+// CAN_L: dominant=LOW, recessive=HIGH_L  (mirror)
+// We place CAN_H in top half, CAN_L in bottom half
+
+let W=800, H=220;
+let BIT_W; // pixels per bit
+
+function resize() {
+  W = canvas.offsetWidth || 800;
+  H = 220;
+  canvas.width  = W;
+  canvas.height = H;
+  BIT_W = (W - PAD_L - PAD_R) / TOTAL;
+  buildSectionRanges();
+}
+
+function buildSectionRanges() {
+  sectionRanges = [];
+  let idx = 0;
+  SECTIONS.forEach((s, si) => {
+    const x0 = PAD_L + idx * BIT_W;
+    const x1 = PAD_L + (idx + s.bits.length) * BIT_W;
+    sectionRanges.push({x0, x1, si});
+    idx += s.bits.length;
+  });
+}
+
+// Row layout inside canvas
+const ROW_H_Y1 = 38;   // CAN_H top (dominant level)
+const ROW_H_Y2 = 72;   // CAN_H bottom (recessive level)
+const ROW_L_Y1 = 108;  // CAN_L top (recessive level)
+const ROW_L_Y2 = 142;  // CAN_L bottom (dominant level)
+const LABEL_Y  = 165;  // section name baseline
+const SEP_Y    = 155;  // separator line Y
+
+function draw(ts) {
+  if (!lastTs) lastTs = ts;
+  const dt = Math.min((ts - lastTs) / 1000, 0.05); // cap dt to avoid jumps
+  lastTs = ts;
+  ballPos = (ballPos + SPEED * dt) % TOTAL;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // --- Background ---
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, W, H);
+
+  // Section background stripes
+  SECTIONS.forEach((s, si) => {
+    const {x0, x1} = sectionRanges[si];
+    ctx.fillStyle = si % 2 === 0 ? 'rgba(0,0,0,0.015)' : 'rgba(0,0,0,0)';
+    ctx.fillRect(x0, 0, x1 - x0, LABEL_Y - 8);
+  });
+
+  // --- Draw CAN_H signal ---
+  drawSignal(
+    (bit) => bit === 0 ? ROW_H_Y1 : ROW_H_Y2,
+    '#e63946', 'CAN-H', ROW_H_Y1 - 10
+  );
+
+  // --- Draw CAN_L signal ---
+  drawSignal(
+    (bit) => bit === 0 ? ROW_L_Y2 : ROW_L_Y1,
+    '#3a86ff', 'CAN-L', ROW_L_Y2 + 18
+  );
+
+  // --- Moving balls ---
+  const ballIdx  = Math.floor(ballPos) % TOTAL;
+  const nextIdx  = (ballIdx + 1) % TOTAL;
+  const frac     = ballPos % 1; // 0..1 progress within current bit
+
+  // Ball X: smooth continuous sliding across the bit cell
+  const ballX = PAD_L + (ballIdx + frac) * BIT_W + BIT_W * 0.5;
+
+  // Ball Y: interpolate smoothly between current and next bit level
+  // Only transition in the middle 30% of the bit to mimic a sharp edge but smoothed
+  const curBitH  = ALL_BITS[ballIdx].bit;
+  const nextBitH = ALL_BITS[nextIdx].bit;
+  const curBitL  = curBitH;
+  const nextBitL = nextBitH;
+
+  function smoothStep(t) { return t * t * (3 - 2 * t); }
+  // transition happens from frac=0.5 to frac=0.8
+  const tRaw = (frac - 0.45) / 0.3;
+  const t = smoothStep(Math.max(0, Math.min(1, tRaw)));
+
+  const yHcur  = curBitH  === 0 ? ROW_H_Y1 : ROW_H_Y2;
+  const yHnext = nextBitH === 0 ? ROW_H_Y1 : ROW_H_Y2;
+  const yLcur  = curBitL  === 0 ? ROW_L_Y2 : ROW_L_Y1;
+  const yLnext = nextBitL === 0 ? ROW_L_Y2 : ROW_L_Y1;
+
+  const yH = yHcur + (yHnext - yHcur) * t;
+  const yL = yLcur + (yLnext - yLcur) * t;
+
+  // H ball
+  ctx.shadowColor = '#e63946'; ctx.shadowBlur = 16;
+  ctx.beginPath(); ctx.arc(ballX, yH, 7, 0, Math.PI*2);
+  ctx.fillStyle = '#e63946'; ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // L ball
+  ctx.shadowColor = '#3a86ff'; ctx.shadowBlur = 16;
+  ctx.beginPath(); ctx.arc(ballX, yL, 7, 0, Math.PI*2);
+  ctx.fillStyle = '#3a86ff'; ctx.fill();
+  ctx.shadowBlur = 0;
+
+  // --- Section separator lines & labels ---
+  ctx.strokeStyle = '#dde3ea';
+  ctx.lineWidth = 1;
+  sectionRanges.forEach(({x0, x1, si}) => {
+    const s = SECTIONS[si];
+    // vertical separator at start
+    ctx.beginPath();
+    ctx.moveTo(x0, LABEL_Y - 12);
+    ctx.lineTo(x0, H - 6);
+    ctx.stroke();
+
+    // horizontal line below signals
+    ctx.beginPath();
+    ctx.moveTo(x0, LABEL_Y - 8);
+    ctx.lineTo(x1, LABEL_Y - 8);
+    ctx.stroke();
+
+    // section name
+    ctx.font = 'bold 11px Nunito, sans-serif';
+    ctx.fillStyle = s.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(s.name, (x0 + x1) / 2, LABEL_Y + 6);
+  });
+  // final separator
+  const lastRange = sectionRanges[sectionRanges.length - 1];
+  ctx.beginPath(); ctx.moveTo(lastRange.x1, LABEL_Y - 12); ctx.lineTo(lastRange.x1, H - 6); ctx.stroke();
+
+  // highlight section under ball
+  const curSi = ALL_BITS[ballIdx].si;
+  const {x0:hx0, x1:hx1} = sectionRanges[curSi];
+  ctx.fillStyle = 'rgba(100,160,255,0.06)';
+  ctx.fillRect(hx0, 0, hx1 - hx0, LABEL_Y - 8);
+
+  requestAnimationFrame(draw);
+}
+
+function drawSignal(getY, color, label, labelY) {
+  ctx.beginPath();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.8;
+  ctx.lineJoin = 'miter';
+
+  for (let i = 0; i <= TOTAL; i++) {
+    const bit  = i < TOTAL ? ALL_BITS[i].bit : ALL_BITS[TOTAL-1].bit;
+    const prevBit = i > 0 ? ALL_BITS[i-1].bit : bit;
+    const x = PAD_L + i * BIT_W;
+    const y = getY(bit);
+    const prevY = getY(prevBit);
+
+    if (i === 0) {
+      ctx.moveTo(x, y);
+    } else {
+      if (prevY !== y) {
+        ctx.lineTo(x, prevY);
+        ctx.lineTo(x, y);
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+  }
+  ctx.stroke();
+
+  // label on left
+  ctx.font = 'bold 11px Fira Code, monospace';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'right';
+  ctx.fillText(label, PAD_L - 6, labelY);
+}
+
+// ============================================================
+// CLICK DETECTION
+// ============================================================
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (canvas.width / rect.width);
+  const my = (e.clientY - rect.top)  * (canvas.height / rect.height);
+
+  if (my > LABEL_Y - 12) {
+    // clicked on label area
+    sectionRanges.forEach(({x0, x1, si}) => {
+      if (mx >= x0 && mx < x1) showInfo(si);
+    });
+  } else {
+    // clicked on signal area — find closest section
+    sectionRanges.forEach(({x0, x1, si}) => {
+      if (mx >= x0 && mx < x1) showInfo(si);
+    });
+  }
+});
+
+const SECTION_COLORS = SECTIONS.map(s => s.color);
+
+function showInfo(si) {
+  const s = SECTIONS[si];
+  const bar = document.getElementById('infoBar');
+  bar.style.borderColor = s.color;
+  bar.innerHTML = `<h3 style="color:${s.color}">${s.title}</h3><p>${s.desc}</p>`;
+}
+
+// ============================================================
+// START
+// ============================================================
+resize();
+window.addEventListener('resize', () => { resize(); });
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
